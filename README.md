@@ -41,6 +41,21 @@ el navegador conservó el permiso, o con un clic si no. Para ver imágenes
 relativas hay que abrir la carpeta (un archivo suelto no da acceso a su carpeta).
 `dist/` no incluye `src/server.js`: no expone ningún sistema de archivos.
 
+### Despliegue (Cloud Run)
+
+El `Dockerfile` arma `dist/` con Node y lo sirve con
+[static-web-server](https://static-web-server.net/) sobre `scratch`
+(imagen final de ~9 MB, sin Node). Headers y CSP en `deploy/sws.toml`.
+
+```sh
+gcloud run deploy markdown-viewer --source . \
+  --account=promolic1@gmail.com --project=angel-gce --region=us-central1 \
+  --allow-unauthenticated --max-instances=1 --min-instances=0 \
+  --execution-environment=gen1 --memory=128Mi --cpu=1 --port=8080
+```
+
+Publicado en https://markdown-viewer-536609787755.us-central1.run.app
+
 ## Cómo funciona
 
 - `public/sources.js` define las «fuentes» de archivos (`ServerSource`,

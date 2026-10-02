@@ -1,0 +1,28 @@
+# static-web-server: serves dist/ on Cloud Run's port.
+[general]
+host = "0.0.0.0"
+port = 8080
+root = "/public"
+log-level = "warn"
+compression = true
+directory-listing = false
+# Built-in caching would give app.js a 1-year max-age; our files aren't hashed.
+cache-control-headers = false
+security-headers = false
+
+[advanced]
+
+# The page renders untrusted markdown (sanitized with DOMPurify); the CSP is
+# a second line of defense: only our own scripts, no plugins, no framing.
+[[advanced.headers]]
+source = "**"
+[advanced.headers.headers]
+Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src * data: blob:; media-src * data: blob:; connect-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'"
+X-Content-Type-Options = "nosniff"
+Referrer-Policy = "no-referrer"
+Cache-Control = "no-cache"
+
+[[advanced.headers]]
+source = "/vendor/**"
+[advanced.headers.headers]
+Cache-Control = "public, max-age=86400"
