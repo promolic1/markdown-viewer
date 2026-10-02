@@ -298,7 +298,7 @@ function createServer({ root, allowedHosts }) {
       if (p === '/api/info') {
         const home = os.homedir();
         const display = root === home || root.startsWith(home + path.sep) ? '~' + root.slice(home.length) : root;
-        return send(res, 200, { root, display, name: path.basename(root) || root, files });
+        return send(res, 200, { mdview: true, root, display, name: path.basename(root) || root, files });
       }
       if (p === '/api/file') return await handleApiFile(req, res, url);
       if (p === '/api/events') return handleEvents(req, res);

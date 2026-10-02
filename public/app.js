@@ -1,4 +1,4 @@
-/* global CodeMirror, markdownit, markdownitFootnote, DOMPurify, hljs */
+/* global CodeMirror, markdownit, markdownitFootnote, DOMPurify, hljs, MdSources */
 'use strict';
 
 (() => {
@@ -44,8 +44,11 @@
 
   // --- File state ----------------------------------------------------------
 
+  const { SourceConflict, ServerSource, NullSource } = MdSources;
+
   const state = {
-    root: '',
+    source: new NullSource(),
+    rootKey: '', // identifies the open folder, for per-folder recents
     rootName: '',
     files: [],
     path: null, // null → scratch buffer (lives in localStorage)
@@ -175,7 +178,7 @@
       + md.render('\n'.repeat(lines) + src.slice(fm[0].length));
   }
 
-  // Map a relative link/image reference to a URL served by the local server.
+  // Resolve a relative link/image reference against the open file's folder.
   function localRef(ref) {
     if (!ref || /^[a-z][a-z0-9+.-]*:/i.test(ref) || ref.startsWith('//')) return null;
     const dir = state.path ? dirname(state.path) : '';
@@ -188,17 +191,16 @@
     } catch {
       return null;
     }
-    return {
-      href: '/files/' + url.pathname.slice(1) + url.search + url.hash,
-      md: MD_RE.test(rel) ? rel : null,
-      hash: url.hash,
-    };
+    return { rel, search: url.search, hash: url.hash, md: MD_RE.test(rel) ? rel : null };
   }
 
   function postProcess(root) {
     for (const img of root.querySelectorAll('img[src]')) {
       const r = localRef(img.getAttribute('src'));
-      if (r) img.setAttribute('src', r.href);
+      if (!r) continue;
+      const url = state.source.assetUrl(r.rel);
+      if (url) img.setAttribute('src', url + r.search);
+      else img.removeAttribute('src');
     }
     for (const a of root.querySelectorAll('a[href]')) {
       const href = a.getAttribute('href');
@@ -209,7 +211,9 @@
         a.dataset.md = r.md;
         if (r.hash) a.dataset.hash = r.hash;
       } else {
-        if (r) a.setAttribute('href', r.href);
+        const url = r && state.source.assetUrl(r.rel);
+        if (url) a.setAttribute('href', url + r.search + r.hash);
+        else if (r) a.dataset.asset = r.rel;
         a.target = '_blank';
         a.rel = 'noopener noreferrer';
       }
@@ -455,7 +459,7 @@
   function updateChrome() {
     const scratch = state.path === null;
     els.filename.textContent = scratch ? 'borrador' : state.path + (state.exists ? '' : ' (nuevo)');
-    els.filename.title = scratch ? 'Guardado en el navegador' : `${state.root}/${state.path}`;
+    els.filename.title = scratch ? 'Guardado en el navegador' : state.path;
     els.reset.textContent = scratch ? 'Reset' : 'Recargar';
     els.reset.title = scratch ? 'Restaurar el texto de bienvenida' : 'Volver a leer el archivo del disco';
     els.save.hidden = scratch;
@@ -500,11 +504,7 @@
   // --- Files ---------------------------------------------------------------
 
   async function fetchFile(rel) {
-    const res = await fetch('/api/file?path=' + encodeURIComponent(rel));
-    if (res.status === 404) return { path: rel, content: null, hash: null };
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || res.statusText);
-    return data;
+    return { path: rel, ...(await state.source.read(rel)) };
   }
 
   async function confirmLeave() {
@@ -521,6 +521,7 @@
     state.exists = content !== null;
     state.diskContent = content ?? '';
     state.diskHash = hash;
+    state.source.setActive(path);
     hideBanner('conflict');
     hideBanner('deleted');
     els.flash.classList.remove('show');
@@ -557,7 +558,7 @@
 
   async function welcome() {
     try {
-      return await (await fetch('/static/welcome.md')).text();
+      return await (await fetch('static/welcome.md')).text();
     } catch {
       return '# Borrador\n';
     }
@@ -627,24 +628,22 @@
     if (!force && state.exists && content === state.diskContent) return;
     const path = state.path;
     saving = (async () => {
-      const res = await fetch('/api/file?path=' + encodeURIComponent(path), {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content, baseHash: state.exists ? state.diskHash : null, force }),
-      });
-      const data = await res.json();
-      if (path !== state.path) return;
-      if (res.status === 409) {
-        if (data.content === content) {
+      let data;
+      try {
+        data = await state.source.write(path, content, { baseHash: state.exists ? state.diskHash : null, force });
+      } catch (err) {
+        if (!(err instanceof SourceConflict)) throw err;
+        if (path !== state.path) return;
+        if (err.content === content) {
           state.exists = true;
-          state.diskHash = data.hash;
+          state.diskHash = err.hash;
           state.diskContent = content;
         } else {
-          conflict(data.content, data.hash);
+          conflict(err.content, err.hash);
         }
         return;
       }
-      if (!res.ok) throw new Error(data.error || res.statusText);
+      if (path !== state.path) return;
       const wasMissing = !state.exists;
       state.diskHash = data.hash;
       state.diskContent = content;
@@ -665,34 +664,22 @@
   // --- Live connection -----------------------------------------------------
 
   function connect() {
-    const es = new EventSource('/api/events');
-    let lost = false;
-    es.onopen = async () => {
-      els.live.className = 'live-dot on';
-      els.live.title = 'Conectado: los cambios en disco se aplican al instante';
-      if (lost && state.path) {
-        lost = false;
-        try {
-          const d = await fetchFile(state.path);
-          onDisk({ path: state.path, content: d.content, hash: d.hash });
-        } catch {}
-      }
-    };
-    es.onerror = () => {
-      lost = true;
-      els.live.className = 'live-dot off';
-      els.live.title = 'Sin conexión con mdview (¿se cerró el servidor?). Reintentando…';
-    };
-    es.addEventListener('tree', (e) => {
-      state.files = JSON.parse(e.data).files;
-      renderSidebar();
+    state.source.watch({
+      tree(files) {
+        state.files = files;
+        renderSidebar();
+      },
+      file: onDisk,
+      status(online, message) {
+        els.live.className = 'live-dot' + (online === true ? ' on' : online === false ? ' off' : '');
+        els.live.title = message;
+      },
     });
-    es.addEventListener('file', (e) => onDisk(JSON.parse(e.data)));
   }
 
   // --- Sidebar -------------------------------------------------------------
 
-  const recentKey = () => 'recent:' + state.root;
+  const recentKey = () => 'recent:' + state.rootKey;
   let kbdIndex = 0;
   let visible = [];
 
@@ -968,18 +955,21 @@
 
   // --- Boot ----------------------------------------------------------------
 
+  function useSource(source) {
+    state.source = source;
+    const info = source.info();
+    state.rootKey = info ? info.key : '';
+    state.rootName = info ? info.name : '';
+    state.files = info ? info.files : [];
+    els.brandSub.textContent = info ? info.display : 'Vista previa en vivo de archivos locales';
+    els.brandSub.title = info ? info.title : '';
+    els.rootPath.replaceChildren(Object.assign(document.createElement('span'), { textContent: info ? info.display : '' }));
+    els.rootPath.title = info ? info.title : '';
+  }
+
   async function boot() {
     applyUi();
-    try {
-      const info = await (await fetch('/api/info')).json();
-      state.root = info.root;
-      state.rootName = info.name;
-      state.files = info.files;
-      els.brandSub.textContent = info.display;
-      els.brandSub.title = info.root;
-      els.rootPath.replaceChildren(Object.assign(document.createElement('span'), { textContent: info.display }));
-      els.rootPath.title = info.root;
-    } catch {}
+    useSource((await ServerSource.detect()) || new NullSource());
     connect();
 
     const file = new URLSearchParams(location.search).get('file');
