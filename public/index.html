@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="es" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Markdown Viewer</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f172a'/%3E%3Ctext x='16' y='21' font-family='monospace' font-weight='700' font-size='13' fill='%2322d3ee' text-anchor='middle'%3EM%E2%86%93%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/vendor/codemirror.css">
+  <link rel="stylesheet" href="/vendor/gh-dark.css" id="gh-dark">
+  <link rel="stylesheet" href="/vendor/gh-light.css" id="gh-light" disabled>
+  <link rel="stylesheet" href="/vendor/hljs-dark.css" id="hljs-dark">
+  <link rel="stylesheet" href="/vendor/hljs-light.css" id="hljs-light" disabled>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <nav class="rail">
+    <button class="rail-btn" data-panel="files" title="Archivos (Ctrl+P)">
+      <svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M8 11h8M8 15h5"/></svg>
+    </button>
+    <button class="rail-btn" data-panel="recent" title="Recientes">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>
+    </button>
+    <button class="rail-btn" id="scratch-btn" title="Borrador (se guarda en el navegador)">
+      <svg viewBox="0 0 24 24"><path d="M15.5 4.5l4 4L9 19H5v-4z"/><path d="M13.5 6.5l4 4"/></svg>
+    </button>
+    <span class="rail-spacer"></span>
+    <span class="live-dot" id="live-dot" title="Conectando…"></span>
+  </nav>
+
+  <aside class="sidebar" id="sidebar" hidden>
+    <div class="sidebar-head">
+      <span id="sidebar-title">Archivos</span>
+      <button class="icon-btn" id="sidebar-close" title="Cerrar">×</button>
+    </div>
+    <input class="filter" id="filter" type="search" placeholder="Filtrar…" autocomplete="off" spellcheck="false">
+    <div class="sidebar-list" id="sidebar-list"></div>
+    <div class="sidebar-foot" id="root-path"></div>
+  </aside>
+
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">M<span>↓</span></div>
+        <div>
+          <div class="brand-title">Markdown Viewer</div>
+          <div class="brand-sub" id="brand-sub">Vista previa en vivo de archivos locales</div>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <div class="seg" id="layout-seg">
+          <button data-layout="editor">Editor</button>
+          <button data-layout="split">Dividido</button>
+          <button data-layout="preview">Vista</button>
+        </div>
+        <button class="pill" id="theme-btn"></button>
+      </div>
+    </header>
+
+    <div class="banner" id="banner" hidden>
+      <span id="banner-text"></span>
+      <span class="banner-actions" id="banner-actions"></span>
+    </div>
+
+    <main class="panes" id="panes">
+      <section class="pane" id="editor-pane">
+        <div class="pane-head">
+          <div class="pane-title">
+            <span class="dot dot-green"></span>
+            <span>Editor</span>
+            <span class="filename" id="filename"></span>
+            <span class="dirty" id="dirty" hidden title="Cambios sin guardar">●</span>
+            <span class="flash" id="flash"></span>
+          </div>
+          <div class="pane-tools">
+            <label class="check" title="Guardar en disco automáticamente mientras escribes">
+              <input type="checkbox" id="autosave"> Autoguardar
+            </label>
+            <button class="tool" id="save-btn" title="Ctrl+S">Guardar</button>
+            <button class="tool" id="reset-btn"></button>
+            <button class="tool" id="copy-btn">Copiar</button>
+            <label class="check"><input type="checkbox" id="sync-scroll" checked> Sync scroll</label>
+          </div>
+        </div>
+        <div class="pane-body editor-body" id="editor-host"></div>
+      </section>
+
+      <div class="divider" id="divider" title="Arrastra para redimensionar · doble clic para centrar"></div>
+
+      <section class="pane" id="preview-pane">
+        <div class="pane-head">
+          <div class="pane-title">
+            <span class="dot dot-cyan"></span>
+            <span>Vista previa</span>
+            <span class="stats" id="stats"></span>
+          </div>
+          <div class="pane-tools">
+            <div class="seg seg-sm" id="width-seg">
+              <button data-width="narrow">Estrecho</button>
+              <button data-width="normal">Normal</button>
+              <button data-width="full">Completo</button>
+            </div>
+            <div class="seg seg-sm" id="style-seg">
+              <button data-style="github">GitHub</button>
+              <button data-style="plain">Normal</button>
+            </div>
+          </div>
+        </div>
+        <div class="pane-body preview-body" id="preview-scroll">
+          <article id="preview"></article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/vendor/codemirror.js"></script>
+  <script src="/vendor/cm-overlay.js"></script>
+  <script src="/vendor/cm-markdown.js"></script>
+  <script src="/vendor/cm-gfm.js"></script>
+  <script src="/vendor/cm-continuelist.js"></script>
+  <script src="/vendor/markdown-it.js"></script>
+  <script src="/vendor/markdown-it-footnote.js"></script>
+  <script src="/vendor/purify.js"></script>
+  <script src="/vendor/highlight.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
