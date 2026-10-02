@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "description": "Visor/editor de Markdown en el navegador con recarga en vivo de archivos locales",
   "scripts": {
-    "start": "node bin/mdview.js"
+    "start": "node bin/mdview.js",
+    "build": "node scripts/build.js"
   },
   "keywords": [],
   "type": "commonjs",

@@ -36,7 +36,7 @@
     width: store.get('width', 'full'),
     style: store.get('style', 'github'),
     split: store.get('split', 50),
-    panel: store.get('panel', null),
+    panel: store.get('panel', undefined), // undefined: never chosen
     sync: store.get('sync', true),
     follow: store.get('follow', true),
     autosave: store.get('autosave', false),
@@ -44,7 +44,8 @@
 
   // --- File state ----------------------------------------------------------
 
-  const { SourceConflict, ServerSource, NullSource } = MdSources;
+  const { SourceConflict, ServerSource, NullSource, FsSource } = MdSources;
+  const canUseFs = FsSource.supported();
 
   const state = {
     source: new NullSource(),
@@ -85,6 +86,7 @@
     list: $('#sidebar-list'),
     sidebarTitle: $('#sidebar-title'),
     rootPath: $('#root-path'),
+    sourceBar: $('#source-bar'),
     brandSub: $('#brand-sub'),
   };
 
@@ -211,7 +213,7 @@
         a.dataset.md = r.md;
         if (r.hash) a.dataset.hash = r.hash;
       } else {
-        const url = r && state.source.assetUrl(r.rel);
+        const url = r && state.source.assetUrl(r.rel, { load: false });
         if (url) a.setAttribute('href', url + r.search + r.hash);
         else if (r) a.dataset.asset = r.rel;
         a.target = '_blank';
@@ -535,20 +537,23 @@
     updateChrome();
   }
 
-  async function openFile(rel, hash) {
-    if (rel !== state.path && !(await confirmLeave())) return;
+  // `confirmed`: the caller already dealt with unsaved changes (or there is
+  // nothing to lose, e.g. when switching folders), so always (re)load.
+  async function openFile(rel, hash, { confirmed = false } = {}) {
+    if (rel !== state.path && !confirmed && !(await confirmLeave())) return false;
     let data;
     try {
       data = await fetchFile(rel);
     } catch (err) {
       showBanner('error', `No se pudo abrir ${rel}: ${err.message}`, [['Cerrar', () => hideBanner()]], true);
-      return;
+      return false;
     }
-    if (rel !== state.path) {
+    if (rel !== state.path || confirmed) {
       load(rel, data.content, data.hash);
       pushRecent(rel);
     }
     if (hash) scrollToAnchor(hash);
+    return true;
   }
 
   async function openScratch() {
@@ -689,11 +694,34 @@
     store.set(recentKey(), list.slice(0, 20));
   }
 
+  function button(label, onclick, className = 'tool') {
+    const b = document.createElement('button');
+    b.className = className;
+    b.textContent = label;
+    b.onclick = onclick;
+    return b;
+  }
+
+  function renderSourceBar() {
+    const bar = els.sourceBar;
+    bar.hidden = state.source.kind === 'server';
+    if (bar.hidden) return;
+    if (canUseFs) {
+      bar.replaceChildren(button('Abrir carpeta', () => pickRoot('dir')), button('Abrir archivo', () => pickRoot('file')));
+    } else {
+      const p = document.createElement('p');
+      p.className = 'source-note';
+      p.innerHTML = 'Para abrir archivos locales usa <b>Chrome</b> o <b>Edge</b>, o ejecuta <code>mdview</code> en tu máquina.';
+      bar.replaceChildren(p);
+    }
+  }
+
   function renderSidebar() {
     const panel = ui.panel;
     sidebar.hidden = !panel;
     for (const b of $$('.rail-btn[data-panel]')) b.classList.toggle('active', b.dataset.panel === panel);
     if (!panel) return;
+    renderSourceBar();
 
     const q = filter.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
     let list = panel === 'files' ? state.files : store.get(recentKey(), []);
@@ -732,8 +760,26 @@
     if (!list.length) {
       const e = document.createElement('div');
       e.className = 'empty';
-      e.textContent = q.length ? 'Sin coincidencias' : panel === 'files' ? 'No hay archivos .md aquí' : 'Nada todavía';
+      e.textContent = q.length ? 'Sin coincidencias'
+        : panel === 'recent' ? 'Nada todavía'
+        : state.source.kind === 'none' ? (canUseFs ? 'Abre una carpeta para ver sus archivos .md' : 'No hay archivos abiertos')
+        : 'No hay archivos .md aquí';
       frag.append(e);
+    }
+    // Folders/files opened before through the browser, to reopen in one click.
+    const roots = panel === 'recent' && state.source.kind !== 'server'
+      ? fsRoots.filter((h) => q.every((term) => h.name.toLowerCase().includes(term)))
+      : [];
+    if (roots.length) {
+      const h = document.createElement('div');
+      h.className = 'tree-dir';
+      h.textContent = 'Carpetas y archivos';
+      frag.append(h);
+      for (const handle of roots) {
+        const b = button((handle.kind === 'directory' ? '📁 ' : '📄 ') + handle.name, () => openRoot(handle), 'tree-file');
+        b.title = handle.kind === 'directory' ? 'Carpeta local' : 'Archivo local';
+        frag.append(b);
+      }
     }
     els.list.replaceChildren(frag);
     const kbd = els.list.querySelector('.kbd');
@@ -813,6 +859,11 @@
     } else if (a.dataset.md) {
       e.preventDefault();
       openFile(a.dataset.md, a.dataset.hash);
+    } else if (a.dataset.asset && state.source.loadAsset) {
+      // Local attachment in File System Access mode: open it as a blob.
+      e.preventDefault();
+      const rel = a.dataset.asset;
+      state.source.loadAsset(rel).then((url) => (url ? window.open(url, '_blank') : flash(`no existe ${rel}`)));
     }
   });
 
@@ -957,6 +1008,7 @@
 
   function useSource(source) {
     state.source = source;
+    source.onAsset = () => scheduleRender(false);
     const info = source.info();
     state.rootKey = info ? info.key : '';
     state.rootName = info ? info.name : '';
@@ -965,23 +1017,139 @@
     els.brandSub.title = info ? info.title : '';
     els.rootPath.replaceChildren(Object.assign(document.createElement('span'), { textContent: info ? info.display : '' }));
     els.rootPath.title = info ? info.title : '';
+    connect();
+    renderSidebar();
   }
+
+  async function loadScratch() {
+    load(null, store.get('scratch', null) ?? (await welcome()), null);
+  }
+
+  // --- File System Access mode (Chrome, Edge…) -------------------------------
+
+  let fsRoots = [];
+
+  async function switchSource(source, preferred) {
+    if (!(await confirmLeave())) {
+      source.close();
+      return false;
+    }
+    state.source.close();
+    useSource(source);
+    const files = state.files;
+    const pick = (preferred && files.includes(preferred) && preferred)
+      || (source.isDir ? files.find((f) => /^readme\.md$/i.test(f)) : files[0]);
+    if (!pick || !(await openFile(pick, undefined, { confirmed: true }))) {
+      await loadScratch();
+      if (files.length) setPanel('files');
+    }
+    return true;
+  }
+
+  // Open a folder or file handle, asking for permission if needed. Without a
+  // user gesture (`prompt: false`) we can only check; if access must be asked
+  // for, offer a button so the click provides the gesture.
+  async function openRoot(handle, { preferred, prompt = true } = {}) {
+    let perm;
+    try {
+      perm = await FsSource.permission(handle, prompt);
+    } catch {
+      perm = 'prompt';
+    }
+    if (perm !== 'granted') {
+      if (prompt) {
+        showBanner('error', `El navegador no dio permiso para abrir «${handle.name}».`, [['Cerrar', () => hideBanner()]], true);
+      } else {
+        showBanner('reopen', `¿Volver a abrir «${handle.name}»? El navegador necesita tu permiso.`, [
+          ['Abrir', () => {
+            hideBanner();
+            openRoot(handle, { preferred });
+          }],
+          ['Ahora no', () => hideBanner()],
+        ]);
+      }
+      return false;
+    }
+    hideBanner('reopen');
+    let source;
+    try {
+      source = await new FsSource(handle).init();
+    } catch (err) {
+      showBanner('error', `No se pudo leer «${handle.name}»: ${err.message}`, [['Cerrar', () => hideBanner()]], true);
+      return false;
+    }
+    const ok = await switchSource(source, preferred);
+    fsRoots = await FsSource.recentRoots();
+    renderSidebar();
+    return ok;
+  }
+
+  async function pickRoot(kind) {
+    let handle;
+    try {
+      handle = kind === 'dir' ? await FsSource.pickDirectory() : await FsSource.pickFile();
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        showBanner('error', `No se pudo abrir: ${err.message}`, [['Cerrar', () => hideBanner()]], true);
+      }
+      return;
+    }
+    await openRoot(handle);
+  }
+
+  // Drop a folder or .md file anywhere on the page to open it. Capture phase,
+  // so CodeMirror doesn't paste the file's text into the editor instead.
+  if (canUseFs) {
+    const droppable = (e) => state.source.kind !== 'server'
+      && [...e.dataTransfer.items].some((item) => item.kind === 'file');
+    window.addEventListener('dragover', (e) => {
+      if (!droppable(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      document.body.classList.add('dropping');
+    }, true);
+    window.addEventListener('dragleave', (e) => {
+      if (!e.relatedTarget) document.body.classList.remove('dropping');
+    }, true);
+    window.addEventListener('drop', (e) => {
+      document.body.classList.remove('dropping');
+      if (!droppable(e)) return;
+      const item = [...e.dataTransfer.items].find((it) => it.kind === 'file');
+      if (!item.getAsFileSystemHandle) return;
+      e.preventDefault();
+      // Must be requested synchronously, while the drop data is accessible.
+      item.getAsFileSystemHandle().then((handle) => {
+        if (!handle) return;
+        if (handle.kind === 'file' && !MD_RE.test(handle.name)) flash('solo carpetas o archivos Markdown');
+        else openRoot(handle, { prompt: false });
+      });
+    }, true);
+  }
+
+  // Debugging/automation hook: open a FileSystemHandle programmatically.
+  window.mdview = { openHandle: (handle) => openRoot(handle, { prompt: false }) };
+
+  // --- Boot ----------------------------------------------------------------
 
   async function boot() {
     applyUi();
-    useSource((await ServerSource.detect()) || new NullSource());
-    connect();
+    const params = new URLSearchParams(location.search);
+    const file = params.get('file');
+    const server = await ServerSource.detect();
+    useSource(server || new NullSource());
 
-    const file = new URLSearchParams(location.search).get('file');
-    if (file) {
-      state.path = undefined; // force a load even if it matches
-      await openFile(file, location.hash || undefined);
-      if (state.path === undefined) state.path = null;
+    if (!(server && file && (await openFile(file, location.hash || undefined, { confirmed: true })))) {
+      await loadScratch();
+      if (server && !file && state.files.length && ui.panel == null) setPanel('files');
     }
-    if (state.path === null || state.path === undefined) {
-      state.path = null;
-      load(null, store.get('scratch', null) ?? (await welcome()), null);
-      if (!file && state.files.length && ui.panel === null) setPanel('files');
+    // First visit to the web version: show where "Abrir carpeta" lives.
+    if (!server && ui.panel === undefined) setPanel('files');
+    if (!server && canUseFs) {
+      fsRoots = await FsSource.recentRoots();
+      renderSidebar();
+      // Reopen the last folder: silently if the browser kept the permission,
+      // otherwise via a one-click banner.
+      if (fsRoots[0]) await openRoot(fsRoots[0], { preferred: file, prompt: false });
     }
     cm.focus();
   }
