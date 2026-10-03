@@ -371,6 +371,36 @@ body.resizing iframe, body.resizing .pane-body { pointer-events: none; }
 }
 .tool:hover { background: var(--btn-hover); }
 .tool:disabled { opacity: 0.4; cursor: default; }
+.menu { position: relative; display: inline-flex; }
+.menu-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--panel);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.3);
+}
+.menu-list button {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  border: 0;
+  background: none;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.menu-list button:hover { background: var(--btn-hover); }
+.menu-list button span { color: var(--faint); font-family: var(--mono); }
 .check {
   display: inline-flex;
   align-items: center;

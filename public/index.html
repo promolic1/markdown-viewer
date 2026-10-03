@@ -79,7 +79,13 @@
             <button class="tool" id="save-btn" title="Ctrl+S">Guardar</button>
             <button class="tool" id="reset-btn"></button>
             <button class="tool" id="copy-btn">Copiar</button>
-            <button class="tool" id="download-btn" title="Descargar como .md (incluye cambios sin guardar)">Descargar</button>
+            <div class="menu" id="download-menu">
+              <button class="tool" id="download-btn" title="Incluye los cambios sin guardar" aria-haspopup="true">Descargar ▾</button>
+              <div class="menu-list" id="download-list" hidden>
+                <button data-format="md">Markdown <span>.md</span></button>
+                <button data-format="html">HTML autocontenido <span>.html</span></button>
+              </div>
+            </div>
             <label class="check"><input type="checkbox" id="sync-scroll" checked> Sync scroll</label>
           </div>
         </div>

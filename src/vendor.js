@@ -11,6 +11,7 @@ const VENDOR = {
   'hljs-dark.css': '@highlightjs/cdn-assets/styles/github-dark.min.css',
   'gh-light.css': 'github-markdown-css/github-markdown-light.css',
   'gh-dark.css': 'github-markdown-css/github-markdown-dark.css',
+  'gh-auto.css': 'github-markdown-css/github-markdown.css',
   'codemirror.js': 'codemirror/lib/codemirror.js',
   'codemirror.css': 'codemirror/lib/codemirror.css',
   'cm-overlay.js': 'codemirror/addon/mode/overlay.js',

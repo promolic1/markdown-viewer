@@ -17,6 +17,7 @@
 //   assetUrl(rel, { load })  →  URL for a local image/attachment, or null if not
 //                              (yet) available; with load (default) the source
 //                              fetches it and calls onAsset() when ready
+//   assetBlob(rel)          →  the local file's bytes as a Blob, or null
 //   close()                    stop watching
 
 class SourceConflict extends Error {
@@ -107,6 +108,11 @@ class ServerSource {
   assetUrl(rel) {
     return 'files/' + encodePath(rel);
   }
+
+  async assetBlob(rel) {
+    const res = await fetch(this.assetUrl(rel));
+    return res.ok ? res.blob() : null;
+  }
 }
 
 // --- No files: scratch buffer only -------------------------------------------
@@ -135,6 +141,10 @@ class NullSource {
   setActive() {}
 
   assetUrl() {
+    return null;
+  }
+
+  async assetBlob() {
     return null;
   }
 
@@ -448,6 +458,14 @@ class FsSource {
     if (asset) return asset.url || null;
     if (load) this.loadAsset(rel);
     return null;
+  }
+
+  async assetBlob(rel) {
+    try {
+      return await (await this.fileHandle(rel)).getFile();
+    } catch {
+      return null;
+    }
   }
 
   async loadAsset(rel) {

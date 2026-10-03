@@ -893,18 +893,120 @@
     }
   };
 
-  // Download what's in the editor (unsaved changes included) as a .md file.
-  els.download.onclick = () => {
-    const name = state.path ? basename(state.path) : 'borrador.md';
-    const url = URL.createObjectURL(new Blob([cm.getValue()], { type: 'text/markdown;charset=utf-8' }));
+  // --- Download -------------------------------------------------------------
+  // Both formats use what's in the editor, unsaved changes included.
+
+  function downloadBlob(name, blob) {
+    const url = URL.createObjectURL(blob);
     const a = Object.assign(document.createElement('a'), { href: url, download: name });
     document.body.append(a);
     a.click();
     a.remove();
     // Firefox reads the blob after click() returns; give it time.
     setTimeout(() => URL.revokeObjectURL(url), 10000);
-    flash('descargado');
+  }
+
+  const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+
+  // A single self-contained page: GitHub styles (following the reader's
+  // light/dark preference), highlighted code and local images embedded as
+  // data: URIs. Relative links are kept, so they work next to the .md files.
+  async function exportHtml(src) {
+    const tpl = document.createElement('template');
+    tpl.innerHTML = DOMPurify.sanitize(renderMarkdown(src), PURIFY);
+    const body = tpl.content;
+    for (const el of body.querySelectorAll('[data-line]')) el.removeAttribute('data-line');
+    for (const box of body.querySelectorAll('input[type=checkbox]')) box.setAttribute('disabled', '');
+    for (const a of body.querySelectorAll('a[href]')) {
+      if (localRef(a.getAttribute('href')) === null && !a.getAttribute('href').startsWith('#')) {
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+      }
+    }
+    await Promise.all([...body.querySelectorAll('img[src]')].map(async (img) => {
+      const r = localRef(img.getAttribute('src'));
+      if (!r) return;
+      try {
+        const blob = await state.source.assetBlob(r.rel);
+        if (blob) img.setAttribute('src', await blobToDataUrl(blob));
+      } catch {}
+    }));
+
+    const css = async (name) => (await fetch('vendor/' + name)).text();
+    const [gh, hlLight, hlDark] = await Promise.all([css('gh-auto.css'), css('hljs-light.css'), css('hljs-dark.css')]);
+    const name = state.path ? basename(state.path) : 'borrador.md';
+    const h1 = body.querySelector('h1');
+    const title = (h1 && h1.textContent.trim()) || name.replace(/\.[^.]+$/, '');
+    const wrap = document.createElement('div');
+    wrap.append(body);
+    return `<!doctype html>
+<html lang="${document.documentElement.lang}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="Markdown Viewer">
+<title>${escapeHtml(title)}</title>
+<style>
+${gh}
+${hlLight}
+:root { color-scheme: light dark; }
+body { margin: 0; background: #fff; }
+.markdown-body { box-sizing: border-box; max-width: 980px; margin: 0 auto; padding: 45px; }
+@media (max-width: 767px) { .markdown-body { padding: 15px; } }
+@media (prefers-color-scheme: dark) {
+body { background: #0d1117; }
+${hlDark}
+}
+</style>
+</head>
+<body>
+<article class="markdown-body">
+${wrap.innerHTML}
+</article>
+</body>
+</html>
+`;
+  }
+
+  async function download(format) {
+    const src = cm.getValue();
+    const name = state.path ? basename(state.path) : 'borrador.md';
+    if (format === 'html') {
+      try {
+        const html = await exportHtml(src);
+        downloadBlob(name.replace(/\.[^.]+$/, '') + '.html', new Blob([html], { type: 'text/html;charset=utf-8' }));
+        flash('HTML descargado');
+      } catch (err) {
+        showBanner('error', `No se pudo exportar a HTML: ${err.message}`, [['Cerrar', () => hideBanner()]], true);
+      }
+    } else {
+      downloadBlob(name, new Blob([src], { type: 'text/markdown;charset=utf-8' }));
+      flash('descargado');
+    }
+  }
+
+  const downloadList = $('#download-list');
+  els.download.onclick = (e) => {
+    e.stopPropagation();
+    downloadList.hidden = !downloadList.hidden;
   };
+  for (const b of downloadList.querySelectorAll('button')) {
+    b.onclick = () => {
+      downloadList.hidden = true;
+      download(b.dataset.format);
+    };
+  }
+  document.addEventListener('click', (e) => {
+    if (!downloadList.hidden && !$('#download-menu').contains(e.target)) downloadList.hidden = true;
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') downloadList.hidden = true;
+  });
 
   els.copy.onclick = async () => {
     try {
