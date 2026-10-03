@@ -76,6 +76,7 @@
     save: $('#save-btn'),
     reset: $('#reset-btn'),
     copy: $('#copy-btn'),
+    download: $('#download-btn'),
     autosave: $('#autosave'),
     sync: $('#sync-scroll'),
     theme: $('#theme-btn'),
@@ -890,6 +891,19 @@
     } catch (err) {
       showBanner('error', `No se pudo recargar: ${err.message}`, [['Cerrar', () => hideBanner()]], true);
     }
+  };
+
+  // Download what's in the editor (unsaved changes included) as a .md file.
+  els.download.onclick = () => {
+    const name = state.path ? basename(state.path) : 'borrador.md';
+    const url = URL.createObjectURL(new Blob([cm.getValue()], { type: 'text/markdown;charset=utf-8' }));
+    const a = Object.assign(document.createElement('a'), { href: url, download: name });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    // Firefox reads the blob after click() returns; give it time.
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    flash('descargado');
   };
 
   els.copy.onclick = async () => {
