@@ -176,13 +176,14 @@ body.dropping .panes { outline: 2px dashed var(--accent); outline-offset: -6px; 
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tree-file {
+.tree-file, .tree-folder {
+  --depth: 0;
   display: block;
   width: 100%;
   text-align: left;
   border: 0;
   background: none;
-  padding: 4px 8px;
+  padding: 4px 8px 4px calc(8px + var(--depth) * 14px + 16px);
   border-radius: 5px;
   color: var(--muted);
   cursor: pointer;
@@ -193,6 +194,30 @@ body.dropping .panes { outline: 2px dashed var(--accent); outline-offset: -6px; 
 .tree-file:hover, .tree-file.kbd { background: var(--btn-hover); color: var(--text); }
 .tree-file.current { color: var(--accent); background: var(--accent-soft); }
 .tree-file .sub { color: var(--faint); font-size: 11px; margin-left: 6px; }
+.tree-file.flat { padding-left: 8px; }
+.tree-folder {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: calc(8px + var(--depth) * 14px);
+  border-radius: 5px;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tree-folder:hover { background: var(--btn-hover); }
+.tree-folder .chev {
+  width: 12px;
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  color: var(--faint);
+  transition: transform 0.12s;
+}
+.tree-folder .chev::before { content: "▸"; font-size: 11px; }
+.tree-folder[aria-expanded="true"] .chev { transform: rotate(90deg); }
+.tree-folder .name { overflow: hidden; text-overflow: ellipsis; }
+.tree-folder .count { margin-left: auto; color: var(--faint); font-size: 11px; }
 .empty { color: var(--faint); padding: 10px 8px; }
 
 /* --- Main layout --------------------------------------------------------- */

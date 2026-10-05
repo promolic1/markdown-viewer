@@ -717,6 +717,63 @@
     }
   }
 
+  // --- File tree --------------------------------------------------------------
+  // Folders start collapsed, except those leading to the open file; whatever
+  // the user expands or collapses is remembered per root.
+
+  const foldKey = () => 'folds:' + state.rootKey;
+
+  function buildTree(paths) {
+    const root = { dirs: new Map(), files: [], count: 0 };
+    for (const p of paths) {
+      let node = root;
+      node.count++;
+      for (const part of p.split('/').slice(0, -1)) {
+        if (!node.dirs.has(part)) node.dirs.set(part, { dirs: new Map(), files: [], count: 0 });
+        node = node.dirs.get(part);
+        node.count++;
+      }
+      node.files.push(p);
+    }
+    return root;
+  }
+
+  function isOpen(dir, folds) {
+    if (dir in folds) return folds[dir];
+    return state.path !== null && state.path.startsWith(dir + '/');
+  }
+
+  function toggleDir(dir) {
+    const folds = store.get(foldKey(), {});
+    folds[dir] = !isOpen(dir, folds);
+    store.set(foldKey(), folds);
+    renderSidebar();
+  }
+
+  function renderTree(node, prefix, depth, frag, expandAll, fileButton) {
+    const folds = store.get(foldKey(), {});
+    const byName = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+    for (const name of [...node.dirs.keys()].sort(byName)) {
+      const child = node.dirs.get(name);
+      const dir = prefix + name;
+      const open = expandAll || isOpen(dir, folds);
+      const row = document.createElement('button');
+      row.className = 'tree-folder';
+      row.style.setProperty('--depth', depth);
+      row.title = dir + '/';
+      row.setAttribute('aria-expanded', String(open));
+      row.innerHTML = '<span class="chev" aria-hidden="true"></span><span class="name"></span><span class="count"></span>';
+      row.querySelector('.name').textContent = name;
+      row.querySelector('.count').textContent = open ? '' : child.count;
+      row.onclick = () => toggleDir(dir);
+      frag.append(row);
+      if (open) renderTree(child, dir + '/', depth + 1, frag, expandAll, fileButton);
+    }
+    for (const p of [...node.files].sort((a, b) => byName(basename(a), basename(b)))) {
+      frag.append(fileButton(p, basename(p), depth));
+    }
+  }
+
   function renderSidebar() {
     const panel = ui.panel;
     sidebar.hidden = !panel;
@@ -727,37 +784,38 @@
     const q = filter.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
     let list = panel === 'files' ? state.files : store.get(recentKey(), []);
     if (q.length) list = list.filter((p) => q.every((term) => p.toLowerCase().includes(term)));
-    visible = list;
-    kbdIndex = clamp(kbdIndex, 0, Math.max(0, list.length - 1));
     els.sidebarTitle.textContent = panel === 'files' ? `Archivos (${state.files.length})` : 'Recientes';
 
     const frag = document.createDocumentFragment();
-    const grouped = panel === 'files' && !q.length;
-    let lastDir = null;
-    list.forEach((p, i) => {
-      const dir = dirname(p);
-      if (grouped && dir !== lastDir) {
-        const h = document.createElement('div');
-        h.className = 'tree-dir';
-        h.textContent = dir ? dir + '/' : state.rootName + '/';
-        frag.append(h);
-        lastDir = dir;
-      }
+    visible = []; // files in display order, for keyboard navigation
+    const fileButton = (p, label, depth) => {
       const b = document.createElement('button');
       b.className = 'tree-file';
       b.title = p;
-      b.textContent = basename(p);
-      if (!grouped && dir) {
-        const s = document.createElement('span');
-        s.className = 'sub';
-        s.textContent = dir;
-        b.append(s);
-      }
+      b.textContent = label;
+      if (depth === undefined) b.classList.add('flat');
+      else b.style.setProperty('--depth', depth);
       if (p === state.path) b.classList.add('current');
-      if (q.length && i === kbdIndex) b.classList.add('kbd');
+      if (q.length && visible.length === kbdIndex) b.classList.add('kbd');
       b.onclick = () => openFile(p);
-      frag.append(b);
-    });
+      visible.push(p);
+      return b;
+    };
+    if (panel === 'files') {
+      renderTree(buildTree(list), '', 0, frag, q.length > 0, fileButton);
+    } else {
+      for (const p of list) {
+        const b = fileButton(p, basename(p));
+        if (dirname(p)) {
+          const sub = document.createElement('span');
+          sub.className = 'sub';
+          sub.textContent = dirname(p);
+          b.append(sub);
+        }
+        frag.append(b);
+      }
+    }
+    kbdIndex = clamp(kbdIndex, 0, Math.max(0, visible.length - 1));
     if (!list.length) {
       const e = document.createElement('div');
       e.className = 'empty';
@@ -777,7 +835,7 @@
       h.textContent = 'Carpetas y archivos';
       frag.append(h);
       for (const handle of roots) {
-        const b = button((handle.kind === 'directory' ? '📁 ' : '📄 ') + handle.name, () => openRoot(handle), 'tree-file');
+        const b = button((handle.kind === 'directory' ? '📁 ' : '📄 ') + handle.name, () => openRoot(handle), 'tree-file flat');
         b.title = handle.kind === 'directory' ? 'Carpeta local' : 'Archivo local';
         frag.append(b);
       }
