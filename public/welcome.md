@@ -7,6 +7,8 @@ mdview notas.md      # abre un archivo (si no existe, se crea al guardar)
 mdview ~/docs        # abre una carpeta y lista todos sus .md
 ```
 
+¿Usas la versión publicada en Firefox u otro navegador? Ejecuta `mdview --web` y quedará conectada a tus archivos.
+
 En **Chrome o Edge** no necesitas instalar nada: abre una carpeta o un archivo desde la barra lateral (o arrástralo a la página) y también se actualizará solo cuando cambie en disco.
 
 ## Encabezados

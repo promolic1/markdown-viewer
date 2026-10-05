@@ -30,33 +30,70 @@ class SourceConflict extends Error {
 
 const encodePath = (rel) => rel.split('/').map(encodeURIComponent).join('/');
 
-// --- Local mdview server ---------------------------------------------------
+// --- mdview server -----------------------------------------------------------
+// Either the page mdview itself serves (same origin, no token), or the hosted
+// web version talking to a local mdview ("agent": base URL + token).
+
+const AGENT_RE = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):\d{1,5}\/$/;
 
 class ServerSource {
-  constructor(info) {
-    this.kind = 'server';
+  constructor(info, { base = '', token = null } = {}) {
+    this.kind = token ? 'agent' : 'server';
+    this.isDir = true;
     this._info = info;
+    this.base = base;
+    this.token = token;
   }
 
-  // Resolves to a ServerSource if the page is being served by `mdview`.
-  static async detect() {
+  // Only loopback addresses: a crafted link must not point us elsewhere.
+  static isAgentUrl(url) {
+    return typeof url === 'string' && AGENT_RE.test(url);
+  }
+
+  // Resolves to a ServerSource if mdview answers at `base` (default: the
+  // server that served this page).
+  static async detect(base = '', token = null, timeoutMs = 4000) {
     try {
-      const res = await fetch('api/info', { cache: 'no-store' });
+      const res = await fetch(base + 'api/info', {
+        cache: 'no-store',
+        headers: token ? { Authorization: 'Bearer ' + token } : {},
+        signal: AbortSignal.timeout(timeoutMs),
+      });
       if (!res.ok || !(res.headers.get('content-type') || '').includes('json')) return null;
       const info = await res.json();
-      return info && info.mdview ? new ServerSource(info) : null;
+      return info && info.mdview ? new ServerSource(info, { base, token }) : null;
     } catch {
       return null;
     }
   }
 
+  _fetch(path, opts = {}) {
+    const headers = { ...(opts.headers || {}) };
+    if (this.token) headers.Authorization = 'Bearer ' + this.token;
+    return fetch(this.base + path, { ...opts, headers });
+  }
+
+  // For URLs the browser loads by itself (EventSource, <img>), which can't
+  // carry an Authorization header.
+  _url(path) {
+    if (!this.token) return this.base + path;
+    return this.base + path + (path.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(this.token);
+  }
+
   info() {
     const i = this._info;
-    return { key: 'server:' + i.root, display: i.display, title: i.root, name: i.name, files: i.files };
+    const agent = this.kind === 'agent';
+    return {
+      key: (agent ? 'agent:' : 'server:') + i.root,
+      display: agent ? `${i.display} · mdview local` : i.display,
+      title: agent ? `${i.root} (vía mdview en ${this.base})` : i.root,
+      name: i.name,
+      files: i.files,
+    };
   }
 
   async read(rel) {
-    const res = await fetch('api/file?path=' + encodeURIComponent(rel));
+    const res = await this._fetch('api/file?path=' + encodeURIComponent(rel));
     if (res.status === 404) return { content: null, hash: null };
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || res.statusText);
@@ -64,7 +101,7 @@ class ServerSource {
   }
 
   async write(rel, content, { baseHash, force }) {
-    const res = await fetch('api/file?path=' + encodeURIComponent(rel), {
+    const res = await this._fetch('api/file?path=' + encodeURIComponent(rel), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content, baseHash, force }),
@@ -76,7 +113,7 @@ class ServerSource {
   }
 
   watch({ tree, file, status }) {
-    const es = new EventSource('api/events');
+    const es = new EventSource(this._url('api/events'));
     let lost = false;
     es.onopen = () => {
       status(true, 'Conectado: los cambios en disco se aplican al instante');
@@ -106,11 +143,11 @@ class ServerSource {
   }
 
   assetUrl(rel) {
-    return 'files/' + encodePath(rel);
+    return this._url('files/' + encodePath(rel));
   }
 
   async assetBlob(rel) {
-    const res = await fetch(this.assetUrl(rel));
+    const res = await this._fetch('files/' + encodePath(rel));
     return res.ok ? res.blob() : null;
   }
 }

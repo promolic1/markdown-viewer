@@ -197,12 +197,15 @@
     return { rel, search: url.search, hash: url.hash, md: MD_RE.test(rel) ? rel : null };
   }
 
+  const withQuery = (url, search) => (!search ? url
+    : url + (url.includes('?') ? '&' + search.slice(1) : search));
+
   function postProcess(root) {
     for (const img of root.querySelectorAll('img[src]')) {
       const r = localRef(img.getAttribute('src'));
       if (!r) continue;
       const url = state.source.assetUrl(r.rel);
-      if (url) img.setAttribute('src', url + r.search);
+      if (url) img.setAttribute('src', withQuery(url, r.search));
       else img.removeAttribute('src');
     }
     for (const a of root.querySelectorAll('a[href]')) {
@@ -215,7 +218,7 @@
         if (r.hash) a.dataset.hash = r.hash;
       } else {
         const url = r && state.source.assetUrl(r.rel, { load: false });
-        if (url) a.setAttribute('href', url + r.search + r.hash);
+        if (url) a.setAttribute('href', withQuery(url, r.search) + r.hash);
         else if (r) a.dataset.asset = r.rel;
         a.target = '_blank';
         a.rel = 'noopener noreferrer';
@@ -705,16 +708,25 @@
 
   function renderSourceBar() {
     const bar = els.sourceBar;
-    bar.hidden = state.source.kind === 'server';
-    if (bar.hidden) return;
-    if (canUseFs) {
-      bar.replaceChildren(button('Abrir carpeta', () => pickRoot('dir')), button('Abrir archivo', () => pickRoot('file')));
-    } else {
+    const kind = state.source.kind;
+    const items = [];
+    const note = (html) => {
       const p = document.createElement('p');
       p.className = 'source-note';
-      p.innerHTML = 'Para abrir archivos locales usa <b>Chrome</b> o <b>Edge</b>, o ejecuta <code>mdview</code> en tu máquina.';
-      bar.replaceChildren(p);
+      p.innerHTML = html;
+      items.push(p);
+    };
+    const offline = agentMissing && (kind === 'none' || kind === 'fs');
+    if (offline) note('No encuentro <code>mdview</code>. Ejecútalo en tu máquina (en la carpeta que quieras) y pulsa Reintentar.');
+    if (canUseFs && kind !== 'server') {
+      items.push(button('Abrir carpeta', () => pickRoot('dir')), button('Abrir archivo', () => pickRoot('file')));
+    } else if (!offline && (kind === 'none' || kind === 'fs')) {
+      note('Para abrir archivos locales ejecuta <code>mdview --web</code> en la carpeta que quieras, o usa <b>Chrome</b> o <b>Edge</b>.');
     }
+    if (offline) items.push(button('Reintentar', () => connectAgent()));
+    bar.hidden = !items.length;
+    bar.classList.toggle('stacked', items.some((el) => el.tagName === 'P'));
+    bar.replaceChildren(...items);
   }
 
   // --- File tree --------------------------------------------------------------
@@ -1211,7 +1223,9 @@ ${wrap.innerHTML}
     state.source.close();
     useSource(source);
     const files = state.files;
+    const last = store.get(recentKey(), []).find((f) => files.includes(f));
     const pick = (preferred && files.includes(preferred) && preferred)
+      || last
       || (source.isDir ? files.find((f) => /^readme\.md$/i.test(f)) : files[0]);
     if (!pick || !(await openFile(pick, undefined, { confirmed: true }))) {
       await loadScratch();
@@ -1303,13 +1317,50 @@ ${wrap.innerHTML}
   // Debugging/automation hook: open a FileSystemHandle programmatically.
   window.mdview = { openHandle: (handle) => openRoot(handle, { prompt: false }) };
 
+  // --- Local mdview from the web version ("agent") ---------------------------
+  // `mdview --web` opens this page with #agent=…&token=…[&file=…]. The
+  // fragment never leaves the browser; we keep the pairing for next time.
+
+  let agentMissing = false;
+
+  function takePairing() {
+    const hash = new URLSearchParams(location.hash.slice(1));
+    const agent = hash.get('agent');
+    const token = hash.get('token');
+    if (!agent || !token) return null;
+    history.replaceState(null, '', location.pathname + location.search);
+    if (!ServerSource.isAgentUrl(agent)) return null;
+    store.set('agent', { url: agent, token });
+    return { file: hash.get('file') };
+  }
+
+  async function findAgent() {
+    const saved = store.get('agent', null);
+    if (!saved || !ServerSource.isAgentUrl(saved.url)) return null;
+    const source = await ServerSource.detect(saved.url, saved.token, 2500);
+    agentMissing = !source;
+    return source;
+  }
+
+  async function connectAgent() {
+    const source = await findAgent();
+    if (!source) {
+      renderSidebar();
+      flash('mdview no responde');
+      return;
+    }
+    await switchSource(source);
+  }
+
   // --- Boot ----------------------------------------------------------------
 
   async function boot() {
     applyUi();
     const params = new URLSearchParams(location.search);
-    const file = params.get('file');
-    const server = await ServerSource.detect();
+    const pairing = takePairing();
+    const file = params.get('file') || (pairing && pairing.file);
+    // Served by mdview itself, or the web version with a local mdview.
+    const server = (await ServerSource.detect()) || (await findAgent());
     useSource(server || new NullSource());
 
     if (!(server && file && (await openFile(file, location.hash || undefined, { confirmed: true })))) {
@@ -1317,7 +1368,7 @@ ${wrap.innerHTML}
       if (server && !file && state.files.length && ui.panel == null) setPanel('files');
     }
     // First visit to the web version: show where "Abrir carpeta" lives.
-    if (!server && ui.panel === undefined) setPanel('files');
+    if (!server && (ui.panel === undefined || agentMissing)) setPanel('files');
     if (!server && canUseFs) {
       fsRoots = await FsSource.recentRoots();
       renderSidebar();

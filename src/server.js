@@ -47,7 +47,13 @@ const isIgnoredDir = (name) => name.startsWith('.') || IGNORED_DIRS.has(name);
 const hashOf = (buf) => crypto.createHash('sha1').update(buf).digest('hex');
 const toPosix = (p) => p.split(path.sep).join('/');
 
-function createServer({ root, allowedHosts }) {
+// Who may use the API:
+//  - the page mdview itself serves (same origin): always, as before;
+//  - pages from `allowedOrigins` (the hosted web version): with the token;
+//  - anything else cross-site, including no-cors <img>/<a> from other
+//    pages (they send no Origin, but browsers send Sec-Fetch-Site): only
+//    with the token.
+function createServer({ root, allowedHosts, allowedOrigins = new Set(), token = null }) {
   root = path.resolve(root);
   const clients = new Set();
   const dirWatchers = new Map(); // abs dir -> FSWatcher
@@ -270,6 +276,43 @@ function createServer({ root, allowedHosts }) {
     });
   }
 
+  function tokenOk(req, url) {
+    if (!token) return false;
+    const auth = req.headers.authorization || '';
+    const given = auth.startsWith('Bearer ') ? auth.slice(7) : url.searchParams.get('token') || '';
+    const a = Buffer.from(given);
+    const b = Buffer.from(token);
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  }
+
+  // Returns null if the request may proceed, or an [status, message] refusal.
+  // Sets CORS headers for allowed cross-origin callers.
+  function checkAccess(req, res, url) {
+    const origin = req.headers.origin;
+    const site = req.headers['sec-fetch-site'];
+    const sameOrigin = origin ? origin === 'http://' + req.headers.host
+      : !site || site === 'same-origin' || site === 'none';
+    if (sameOrigin) return null;
+    if (origin) {
+      if (!allowedOrigins.has(origin)) return [403, 'Origen no permitido'];
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+    }
+    if (req.method === 'OPTIONS') return null; // preflight carries no token
+    return tokenOk(req, url) ? null : [401, 'Falta el token de mdview'];
+  }
+
+  function preflight(req, res) {
+    res.writeHead(204, {
+      'Access-Control-Allow-Methods': 'GET, PUT',
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+      // Chrome's Private Network Access: a public site calling localhost.
+      'Access-Control-Allow-Private-Network': 'true',
+      'Access-Control-Max-Age': '600',
+    });
+    res.end();
+  }
+
   const server = http.createServer(async (req, res) => {
     // Reject DNS-rebinding style requests: only answer to our own host names.
     if (allowedHosts && !allowedHosts.has(req.headers.host)) {
@@ -277,6 +320,11 @@ function createServer({ root, allowedHosts }) {
     }
     const url = new URL(req.url, 'http://localhost');
     const p = decodeURIComponent(url.pathname);
+    if (p.startsWith('/api/') || p.startsWith('/files/')) {
+      const refused = checkAccess(req, res, url);
+      if (refused) return send(res, refused[0], { error: refused[1] });
+      if (req.method === 'OPTIONS') return preflight(req, res);
+    }
     try {
       if (p === '/' || p === '/index.html') return serveFile(res, path.join(PUBLIC_DIR, 'index.html'));
       if (p === '/api/info') {

@@ -4,19 +4,20 @@ Visor/editor de Markdown en el navegador (estilo markdownonline.org) que trabaja
 sobre **archivos locales** y aplica al instante los cambios hechos en disco por
 cualquier otro programa (vim, VS Code, scripts…).
 
-La misma página funciona de dos modos:
+La misma página funciona de tres maneras:
 
-| | CLI local (`mdview`) | Web estática (`npm run build`) |
-|---|---|---|
-| Navegadores | todos, Firefox incluido | Chrome/Edge para archivos; el resto solo borrador |
-| Acceso a archivos | servidor Node en `127.0.0.1` | File System Access API, sin servidor |
-| Cambios en disco | `fs.watch` + SSE, al instante | sondeo de `lastModified` cada 0,5 s |
-| Archivos nuevos en la carpeta | al instante | cada 4 s |
+| | `mdview` (página local) | Web + `mdview --web` | Web sola (Chrome/Edge) |
+|---|---|---|---|
+| Navegadores | todos | todos | Chromium; el resto solo borrador |
+| Acceso a archivos | servidor Node en `127.0.0.1` | la página publicada habla con ese mismo servidor (CORS + token) | File System Access API |
+| Cambios en disco | `fs.watch` + SSE, al instante | igual | sondeo cada 0,5 s |
+| Instalar algo | sí | sí | no |
 
-Al cargar, la página detecta el modo sola: si responde `api/info` está detrás
-de `mdview`; si no, y el navegador tiene `showDirectoryPicker`, ofrece
-«Abrir carpeta» / «Abrir archivo» (o arrastrar una carpeta a la página); si
-tampoco, queda el borrador guardado en el navegador.
+Al cargar, la página detecta qué hay (por capacidades, no por navegador):
+1. ¿la sirve `mdview`? (`api/info` en el mismo origen)
+2. ¿hay un `mdview` local emparejado que responde?
+3. ¿existe `showDirectoryPicker`? → «Abrir carpeta» / «Abrir archivo»
+4. si nada de lo anterior, el borrador guardado en el navegador.
 
 ## Modo CLI
 
@@ -27,7 +28,29 @@ node bin/mdview.js ~/docs        # abre una carpeta y lista todos sus .md
 node bin/mdview.js --help
 ```
 
-## Modo web
+## Web + `mdview` local (cualquier navegador)
+
+```sh
+mdview --web notas.md     # abre la versión publicada, conectada a este mdview
+```
+
+Un mismo proceso sirve la página local y atiende a la publicada; no hay un
+segundo servidor. `--web` abre la web con `#agent=…&token=…`: lo que va tras
+el `#` no sale del navegador, así que Cloud Run no ve ni el token ni los
+nombres de archivo. La página guarda el emparejamiento y la próxima vez
+encuentra sola a `mdview` mientras esté corriendo (con o sin `--web`); si no
+responde, la barra lateral lo dice y ofrece «Reintentar».
+
+Seguridad del servidor:
+- el token es persistente, se guarda en `~/.config/mdview/token` (`%APPDATA%`
+  en Windows, `~/Library/Application Support` en macOS) con permisos 600;
+- solo los orígenes de la versión publicada (más `--allow-origin`) reciben
+  CORS, y siempre con el token;
+- cualquier petición de otro sitio, incluidas las de `<img>` que no mandan
+  `Origin`, se detecta con `Sec-Fetch-Site` y exige el token;
+- la página solo acepta emparejarse con direcciones de loopback.
+
+## Web sola (Chrome/Edge)
 
 ```sh
 npm run build                    # genera dist/ (HTML + JS + CSS, sin backend)
